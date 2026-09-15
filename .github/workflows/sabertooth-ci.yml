@@ -5,7 +5,7 @@ on:
     branches: [master]
   push:
     branches:
-      - fork/no-subscription-mcp
+      - "fork/**"
 
 jobs:
   test:
@@ -24,4 +24,4 @@ jobs:
           npm run build:programs
           npm run build:exercises
       - run: npm run check:lambda
-      - run: npx mocha -r ts-node/register --timeout 0 test/freeAccess.test.ts
+      - run: npx mocha -r ts-node/register --timeout 0 test/freeAccess.test.ts test/serviceConfig.test.ts
