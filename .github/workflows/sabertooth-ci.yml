@@ -17,5 +17,11 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run check
+      - name: Prepare generated sources
+        run: |
+          npm run ensure:localdomain
+          npm run build:markdown
+          npm run build:programs
+          npm run build:exercises
+      - run: npm run check:lambda
       - run: npx mocha -r ts-node/register --timeout 0 test/freeAccess.test.ts
