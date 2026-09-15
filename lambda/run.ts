@@ -16,6 +16,12 @@ if (process.env.LFT_REQUIRE_SUBSCRIPTION == null) {
   process.env.LFT_REQUIRE_SUBSCRIPTION = "false";
 }
 
+// Keep raw library/test behavior upstream-compatible while advertising the
+// Sabertooth identity from the deployed fork entrypoint.
+if (process.env.SABERTOOTH_MCP_SERVER_NAME == null && process.env.MCP_SERVER_NAME == null) {
+  process.env.SABERTOOTH_MCP_SERVER_NAME = "sabertooth-mcp";
+}
+
 const diBuilder = (): IDI => buildDi(new LogUtil(), fetch);
 
 export const handler = getHandler(diBuilder);
