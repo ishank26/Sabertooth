@@ -1,7 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { Endpoint, RouteHandler } from "yatro";
 import { IDI } from "../utils/di";
-import { Utils_getEnv, Utils_isLocal } from "../utils";
 import { UserDao } from "../dao/userDao";
 import { OauthDao } from "../dao/oauthDao";
 import { ApiKeyDao } from "../dao/apiKeyDao";
@@ -19,8 +18,8 @@ import { McpToolExecutor_execute } from "./executor";
 import { ApiKeyAuth_deviceIdForKey } from "../utils/apiKeyAuth";
 import { EventDao } from "../dao/eventDao";
 import { AccessPolicy_canUseAccountTools } from "../utils/accessPolicy";
+import { ServiceConfig_mcpServerName, ServiceConfig_publicBaseUrl } from "../utils/serviceConfig";
 
-const SERVER_NAME = "liftosaur-mcp";
 const SERVER_VERSION = "1.0.0";
 const PROTOCOL_VERSION = "2025-03-26";
 
@@ -120,7 +119,7 @@ export const postMcpHandler: RouteHandler<IPayload, APIGatewayProxyResult, typeo
       jsonRpcResponse(req.id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: {} },
-        serverInfo: { name: SERVER_NAME, version: SERVER_VERSION },
+        serverInfo: { name: ServiceConfig_mcpServerName(), version: SERVER_VERSION },
       })
     );
   }
@@ -251,11 +250,7 @@ async function handleToolCall(
   const authHeader = event.headers.Authorization || event.headers.authorization;
   if (!authHeader?.startsWith("Bearer ")) {
     di.log.log(`[MCP] ${toolName} -> 401: no bearer token`);
-    const baseUrl = Utils_isLocal()
-      ? "https://local.liftosaur.com:8080"
-      : Utils_getEnv() === "dev"
-        ? "https://stage.liftosaur.com"
-        : "https://www.liftosaur.com";
+    const baseUrl = ServiceConfig_publicBaseUrl();
     return {
       statusCode: 401,
       body: JSON.stringify({ error: "unauthorized" }),
@@ -287,11 +282,7 @@ async function handleToolCall(
   }
   if (!userId || !deviceId) {
     di.log.log(`[MCP] ${toolName} -> 401: invalid/expired token`);
-    const baseUrl = Utils_isLocal()
-      ? "https://local.liftosaur.com:8080"
-      : Utils_getEnv() === "dev"
-        ? "https://stage.liftosaur.com"
-        : "https://www.liftosaur.com";
+    const baseUrl = ServiceConfig_publicBaseUrl();
     return {
       statusCode: 401,
       body: JSON.stringify({ error: "unauthorized" }),
