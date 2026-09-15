@@ -83,7 +83,7 @@ describe("Sabertooth subscription-free authenticated access", () => {
 
     const storage = Storage_getDefault();
     userId = storage.tempUserId;
-    storage.subscription = {};
+    storage.subscription = { apple: [], google: [] };
 
     const log = new MockLogUtil();
     const mockFetch = new MockFetch(userId, []);
