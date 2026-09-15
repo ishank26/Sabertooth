@@ -1,0 +1,27 @@
+name: Sabertooth CI
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches:
+      - fork/no-subscription-mcp
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Prepare generated sources
+        run: |
+          npm run ensure:localdomain
+          npm run build:markdown
+          npm run build:programs
+          npm run build:exercises
+      - run: npm run check:lambda
+      - run: npx mocha -r ts-node/register --timeout 0 test/freeAccess.test.ts

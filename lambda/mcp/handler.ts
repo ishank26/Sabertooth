@@ -16,9 +16,9 @@ import {
   McpReference_listExercises,
 } from "./reference";
 import { McpToolExecutor_execute } from "./executor";
-import { Subscriptions } from "../utils/subscriptions";
 import { ApiKeyAuth_deviceIdForKey } from "../utils/apiKeyAuth";
 import { EventDao } from "../dao/eventDao";
+import { AccessPolicy_canUseAccountTools } from "../utils/accessPolicy";
 
 const SERVER_NAME = "liftosaur-mcp";
 const SERVER_VERSION = "1.0.0";
@@ -311,10 +311,9 @@ async function handleToolCall(
     return textResult(req.id, "User not found", { isError: true });
   }
 
-  const subscriptions = new Subscriptions(di.log, di.secrets);
-  const hasSub = await subscriptions.hasSubscription(di, userId, user.storage.subscription);
-  if (!hasSub) {
-    di.log.log(`[MCP] ${toolName} -> 403: no subscription`);
+  const hasAccess = await AccessPolicy_canUseAccountTools(di, userId, user);
+  if (!hasAccess) {
+    di.log.log(`[MCP] ${toolName} -> 403: subscription required by access policy`);
     return textResult(req.id, "Active subscription required to use MCP tools", { isError: true });
   }
 

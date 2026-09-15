@@ -1,9 +1,9 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from "aws-lambda";
 import { ApiKeyDao } from "../dao/apiKeyDao";
 import { UserDao, ILimitedUserDao } from "../dao/userDao";
-import { Subscriptions } from "./subscriptions";
 import { IDI } from "./di";
 import { createHash } from "crypto";
+import { AccessPolicy_canUseAccountTools } from "./accessPolicy";
 
 export interface IApiKeyAuthResult {
   userId: string;
@@ -74,9 +74,8 @@ export async function withApiAuth(
     return apiError(401, "unauthorized", "User not found");
   }
 
-  const subscriptions = new Subscriptions(di.log, di.secrets);
-  const hasSub = await subscriptions.hasSubscription(di, keyRecord.userId, user.storage.subscription);
-  if (!hasSub) {
+  const hasAccess = await AccessPolicy_canUseAccountTools(di, keyRecord.userId, user);
+  if (!hasAccess) {
     return apiError(403, "subscription_required", "Active subscription required to use the API");
   }
 
