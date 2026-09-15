@@ -6,13 +6,13 @@ Sabertooth is a fork of Liftosaur intended for self-hosted use while preserving 
 
 Upstream Liftosaur requires an active subscription before authenticated REST API and MCP account tools can run. Sabertooth routes both access paths through a shared access policy.
 
-For a Sabertooth self-hosted deployment, set:
+The Sabertooth Lambda entrypoint defaults to subscription-free access. For other entrypoints (for example a custom local server), set:
 
 ```bash
 LFT_REQUIRE_SUBSCRIPTION=false
 ```
 
-With that setting:
+With free access enabled:
 
 - Authentication is still required for private account tools.
 - OAuth and API-key identity checks are unchanged.
@@ -21,7 +21,7 @@ With that setting:
 - Public reference MCP tools remain unauthenticated, matching upstream behavior.
 - Apple/Google purchase receipts and Liftosaur free-user entitlement keys are not required for API/MCP access.
 
-If `LFT_REQUIRE_SUBSCRIPTION` is absent, malformed, or set to a truthy value (`1`, `true`, `yes`, `on`), the upstream subscription gate remains enabled. This fail-closed default makes it possible to keep upstream-compatible deployments while explicitly opting a Sabertooth deployment into free authenticated access.
+`AccessPolicy_requiresSubscription()` remains fail-closed when used directly: if `LFT_REQUIRE_SUBSCRIPTION` is absent, malformed, or set to a truthy value (`1`, `true`, `yes`, `on`), the upstream subscription gate is enabled. `lambda/run.ts` explicitly supplies Sabertooth's default by setting the variable to `false` when it is absent. Set `LFT_REQUIRE_SUBSCRIPTION=true` to intentionally restore upstream entitlement behavior.
 
 ## Security boundary
 
@@ -34,11 +34,12 @@ The first implementation phase changes only the access decision:
 1. `lambda/utils/accessPolicy.ts` centralizes the subscription policy.
 2. `lambda/utils/apiKeyAuth.ts` uses the policy after API-key and user validation.
 3. `lambda/mcp/handler.ts` uses the same policy after OAuth/API-key and user validation.
-4. `test/freeAccess.test.ts` verifies authenticated REST and MCP calls work without subscription state when free mode is enabled, while unauthenticated calls still fail.
+4. `lambda/run.ts` defaults Sabertooth's deployed Lambda to subscription-free mode.
+5. `test/freeAccess.test.ts` verifies authenticated REST and MCP calls work without subscription state when free mode is enabled, while unauthenticated calls still fail.
 
 ## Next phases
 
-- Parameterize Liftosaur-specific hosts/domains and configure the self-host stack to set `LFT_REQUIRE_SUBSCRIPTION=false` automatically.
+- Parameterize Liftosaur-specific hosts/domains and configuration for self-hosting.
 - Rebrand user-facing Liftosaur names, icons, bundle IDs, and MCP server metadata to Sabertooth while keeping required upstream notices.
 - Remove unused commerce/payment infrastructure from the Sabertooth deployment after parity is established.
 - Add a deployment path that is easier to self-host than the current Liftosaur AWS stack.
