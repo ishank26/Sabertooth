@@ -1,5 +1,7 @@
 # Next steps
 
+A detailed executable plan for all remaining phases is maintained in [implementation-roadmap.md](./implementation-roadmap.md).
+
 Completed foundations:
 
 1. Parameterize public/API hostnames, OAuth metadata, and MCP service identity away from hard-coded Liftosaur production URLs.
@@ -9,8 +11,13 @@ Completed foundations:
 
 Remaining work:
 
-1. Rebrand remaining user-facing Liftosaur names, icons, deep-link schemes, and bundle identifiers while retaining AGPL/upstream notices.
-2. Remove now-unused commerce UI/thunks/payment infrastructure after compatibility requirements are finalized.
-3. Add a simpler self-host deployment target outside the current AWS-specific stack.
-4. Parameterize remaining native/web production hosts and telemetry destinations that still point at Liftosaur infrastructure.
-5. Validate import of Liftosaur JSON exports into Sabertooth.
+1. Complete the dependency/infrastructure audit that gates the self-host design.
+2. Add a simpler self-host deployment target outside the current AWS-specific stack.
+3. Validate MCP + OAuth end-to-end against the self-hosted target.
+4. Parameterize or disable remaining native/web production hosts and telemetry destinations that still point at Liftosaur infrastructure.
+5. Rebrand remaining user-facing Liftosaur names, icons, deep-link schemes, and bundle identifiers while retaining AGPL/upstream notices.
+6. Remove now-unused commerce UI/thunks/payment infrastructure after compatibility requirements are finalized.
+7. Validate import of Liftosaur JSON exports into Sabertooth.
+8. Build reproducible mobile release pipelines.
+9. Install and manage the canonical 4-day fitness program through Sabertooth MCP.
+10. Harden backup/restore, security, observability, and upstream synchronization.
