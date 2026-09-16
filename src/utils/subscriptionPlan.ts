@@ -1,5 +1,6 @@
 import { ISubscription } from "../types";
 import { IIapActiveSubscription } from "./iapAdapter";
+import { AppAccessPolicy_hasFullAccess } from "./appAccessPolicy";
 import { Subscriptions_hasSubscription } from "./subscriptions";
 
 export type ISubscriptionPlanState =
@@ -43,6 +44,10 @@ export function SubscriptionPlan_derive(args: {
   isIos?: boolean;
 }): IDerivedSubscriptionPlan {
   const { subscription, status, ownedLifetime, isNative, isIos } = args;
+
+  if (AppAccessPolicy_hasFullAccess()) {
+    return { state: "freeaccess" };
+  }
 
   if (subscription.key && subscription.key !== "unclaimed") {
     return { state: "freeaccess" };
