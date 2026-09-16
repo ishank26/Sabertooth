@@ -30,6 +30,7 @@ import {
   IIapSubscriptionProduct,
 } from "./iapAdapter";
 import { IapHelpers_getSkus } from "./iapHelpers";
+import { AppAccessPolicy_shouldUseCommerce } from "./appAccessPolicy";
 
 const APPLE_KEY_IDENTIFIER = "CNHQ5ZL35U";
 
@@ -102,6 +103,10 @@ export class IapAdapter implements IIapAdapter {
   private cachedSubscriptions: IIapSubscriptionProduct[] = [];
   private readonly priceCache: Map<string, IPriceCacheEntry> = new Map();
 
+  private shouldUseCommerce(): boolean {
+    return AppAccessPolicy_shouldUseCommerce();
+  }
+
   private cachePrice(id: string, price: number | null | undefined, currency: string | null | undefined): void {
     const numericPrice = typeof price === "number" ? price : undefined;
     const c = typeof currency === "string" && currency.length > 0 ? currency : undefined;
@@ -115,14 +120,24 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async initConnection(): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     await initConnection();
   }
 
   public async endConnection(): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     await endConnection();
   }
 
   public async fetchSubscriptions(skus: string[]): Promise<IIapSubscriptionProduct[]> {
+    if (!this.shouldUseCommerce()) {
+      this.cachedSubscriptions = [];
+      return [];
+    }
     const result = (await fetchProducts({ skus, type: "subs" })) as ProductSubscription[] | null;
     (result ?? []).forEach((p) => this.cachePrice(p.id, p.price, p.currency));
     const mapped = (result ?? []).map(toIapSubscriptionProduct);
@@ -131,6 +146,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async fetchInAppProducts(skus: string[]): Promise<IIapInAppProduct[]> {
+    if (!this.shouldUseCommerce()) {
+      return [];
+    }
     const result = (await fetchProducts({ skus, type: "in-app" })) as Product[] | null;
     (result ?? []).forEach((p) => {
       const currency = (p as { currency?: string | null }).currency ?? null;
@@ -140,6 +158,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async getProductPrice(productId: string): Promise<{ price?: number; currency?: string }> {
+    if (!this.shouldUseCommerce()) {
+      return {};
+    }
     const cached = this.priceCache.get(productId);
     if (cached?.price != null) {
       return { price: cached.price, currency: cached.currency };
@@ -156,11 +177,17 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async getAvailablePurchases(): Promise<IIapPurchase[]> {
+    if (!this.shouldUseCommerce()) {
+      return [];
+    }
     const result = await getAvailablePurchases();
     return (result ?? []).map((p) => toIapPurchase(p, this.priceCache));
   }
 
   public async getActiveSubscriptions(): Promise<IIapActiveSubscription[]> {
+    if (!this.shouldUseCommerce()) {
+      return [];
+    }
     const result = await getActiveSubscriptions();
     return (result ?? []).map((s) => {
       const renewsAs = s.renewalInfoIOS?.autoRenewPreference ?? s.renewalInfoIOS?.pendingUpgradeProductId ?? undefined;
@@ -176,6 +203,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async requestSubscription(args: IIapRequestSubscriptionArgs): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     // A plan switch reuses the old purchase token. The switching user already consumed their intro,
     // so an intro/discount offer is ineligible and Play rejects it with DEVELOPER_ERROR — use the
     // base-plan offer for switches.
@@ -209,6 +239,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async openManageSubscriptions(): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     if (Platform.OS === "ios") {
       await showManageSubscriptionsIOS();
     } else {
@@ -217,6 +250,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async requestInAppProduct(args: { sku: string }): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     await requestPurchase({
       type: "in-app",
       request: {
@@ -227,6 +263,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async finishTransaction(purchase: IIapPurchase): Promise<void> {
+    if (!this.shouldUseCommerce()) {
+      return;
+    }
     await finishTransaction({
       // purchaseToken is required on Android - without it the purchase is never acknowledged,
       // and Google auto-refunds unacknowledged purchases after 3 days
@@ -241,6 +280,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async getReceiptDataIOS(): Promise<string | undefined> {
+    if (!this.shouldUseCommerce()) {
+      return undefined;
+    }
     try {
       const r = await getReceiptDataIOS();
       return r || undefined;
@@ -250,6 +292,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async getReceiptIOS(): Promise<string | undefined> {
+    if (!this.shouldUseCommerce()) {
+      return undefined;
+    }
     try {
       const r = await getReceiptIOS();
       return r || undefined;
@@ -259,6 +304,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public async presentCodeRedemptionSheetIOS(): Promise<boolean> {
+    if (!this.shouldUseCommerce()) {
+      return false;
+    }
     try {
       return await presentCodeRedemptionSheetIOS();
     } catch (e) {
@@ -268,6 +316,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public onPurchaseUpdated(handler: (purchase: IIapPurchase) => void | Promise<void>): () => void {
+    if (!this.shouldUseCommerce()) {
+      return () => {};
+    }
     const handled = new Set<string>();
     const sub = purchaseUpdatedListener(async (p) => {
       const purchase = toIapPurchase(p, this.priceCache);
@@ -290,6 +341,9 @@ export class IapAdapter implements IIapAdapter {
   }
 
   public onPurchaseError(handler: (error: IIapPurchaseError) => void | Promise<void>): () => void {
+    if (!this.shouldUseCommerce()) {
+      return () => {};
+    }
     const sub = purchaseErrorListener((e: { code?: string; message?: string; productId?: string | null }) =>
       handler({
         code: e.code ?? "unknown",

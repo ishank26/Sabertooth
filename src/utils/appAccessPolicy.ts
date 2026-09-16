@@ -20,3 +20,13 @@ export function AppAccessPolicy_requiresSubscription(): boolean {
 export function AppAccessPolicy_hasFullAccess(): boolean {
   return !AppAccessPolicy_requiresSubscription();
 }
+
+/**
+ * Store/IAP runtime should only be active when the deployment intentionally
+ * enables Liftosaur-compatible subscription gating. Sabertooth's default free
+ * mode therefore avoids store connections, product fetches, restores, and
+ * receipt verification traffic.
+ */
+export function AppAccessPolicy_shouldUseCommerce(): boolean {
+  return AppAccessPolicy_requiresSubscription();
+}
