@@ -1,934 +1,856 @@
-# Sabertooth detailed implementation roadmap
+# Sabertooth Personal implementation roadmap
 
-This document turns the high-level roadmap into an executable plan. The ordering is deliberate: first make the fork independently runnable, then make MCP usable end-to-end, then clean up branding/commerce, migration, mobile distribution, and hardening.
+This roadmap replaces the earlier server-first self-host plan with a local-first product direction. The primary deliverable is an installable iPhone PWA that runs workouts offline, stores data locally, and does not require an account, subscription, hosted database, analytics service, AWS infrastructure, or Liftosaur production service.
 
-## Execution model
+The earlier subscription-removal and MCP work remains useful reference code, but it is no longer on the critical path for the personal app.
 
-- Work in one focused branch/PR per phase or sub-phase.
-- Keep `master` deployable after each merge.
-- Prefer adapters/configuration over broad rewrites until self-hosting works end-to-end.
-- Do not weaken authentication to achieve free access. Subscription entitlement is removed; user authentication and per-user authorization remain required.
-- Preserve AGPL-3.0 licensing and upstream attribution.
-- Every infrastructure phase must include tests and rollback notes.
+See [local-first-architecture.md](./local-first-architecture.md) for the target architecture and dependency rules.
 
-## Dependency order
+## Execution principles
 
-1. Phase 1 -> Phase 2 -> Phase 3 is the critical path.
-2. Phase 4 should begin after Phase 2 establishes the target self-host topology.
-3. Phase 5 can run after Phase 4 identifies all remaining branding/domain coupling.
-4. Phase 6 should happen only after we no longer need upstream commerce compatibility.
-5. Phase 7 requires a working self-hosted data store from Phase 2.
-6. Phase 8 requires Phase 4/5 to eliminate production identifiers and upstream endpoints.
-7. Phase 9 requires Phase 3 and Phase 7.
-8. Phase 10 starts during Phase 2 and becomes a release gate after Phase 9.
+- Build for one primary user and one primary device class first: iPhone/Safari/PWA.
+- Keep the base app fully usable without a backend.
+- Prefer pure domain modules and browser APIs over network services and service SDKs.
+- Reuse valuable Liftosaur AGPL code where it lowers risk, especially Liftoscript/program logic and exercise definitions.
+- Do not drag account, sync, billing, analytics, AWS, or SaaS infrastructure into the Personal build simply because it exists upstream.
+- Preserve AGPL-3.0 licensing and upstream attribution for reused code.
+- Keep master buildable after each phase.
+- One focused branch/PR per phase or sub-phase.
+- MCP is optional and comes after the local app is already useful.
+
+## Critical path
+
+1. Phase 1 — isolate reusable workout core
+2. Phase 2 — create the Personal PWA shell
+3. Phase 3 — implement workout execution and the canonical four-day program
+4. Phase 4 — local persistence, backup, and migration
+5. Phase 5 — iPhone install/offline validation
+6. Phase 6 — remove unintended network/server dependencies from the Personal build
+
+After the MVP is stable:
+
+7. Phase 7 — optional MCP bridge
+8. Phase 8 — hardening, release/update flow, and optional native-app evaluation
 
 ---
 
-# Phase 1 — Dependency and infrastructure audit
+# Phase 1 — Extract the reusable workout core
 
 ## Goal
 
-Produce a complete map of what Sabertooth still depends on so later self-hosting work is based on evidence rather than assumptions.
+Create a small, browser-safe domain layer containing only the Liftosaur logic we actually need for a personal workout tracker.
 
-## Current starting point
-
-The backend dependency-injection boundary already exposes DynamoDB, S3, SES, Secrets Manager, Lambda invocation, CloudWatch, logging, and fetch through `lambda/utils/di.ts`. The development server already adapts Node HTTP requests to the existing Lambda/API Gateway handler in `devserver.ts`, which gives us a useful starting point for a non-Lambda server process.
+The result should be usable without React Native, AWS, account state, sync, payments, telemetry, or network access.
 
 ## Implementation tasks
 
-### 1.1 Inventory source-level dependencies
+### 1.1 Identify the minimum reusable modules
 
-Search the repository for:
+Trace and classify code for:
 
-- `liftosaur.com`, `api3.liftosaur.com`, `stage.liftosaur.com`, local Liftosaur domains
-- hard-coded OAuth callback/issuer/resource URLs
-- app update URLs and universal-link hosts
-- App Store / Play Billing product IDs
-- Google OAuth client IDs
-- Rollbar, analytics, attribution, push, web-push, and telemetry endpoints
-- AWS SDK clients and environment variables
-- native bundle IDs/application IDs/deep-link schemes
+- Liftoscript parsing and validation
+- program/day/exercise representation
+- set/rep definitions
+- progression rules
+- warmup behavior needed by the program
+- timers/rest durations
+- exercise definitions/equipment metadata
+- custom exercises
+- workout completion/history records
+- weight/unit helpers
+- statistics needed for Progress
 
-Create `docs/architecture/dependency-audit.md` with columns:
+For every imported module, record whether it pulls in:
 
-- component
-- code path
-- dependency/service
-- purpose
-- data handled
-- required for MVP?
-- disposition: keep / parameterize / replace / remove
-- target phase
+- service/API clients
+- account/user state
+- React Native APIs
+- telemetry
+- subscriptions
+- platform bridges
+- AWS/server types
 
-### 1.2 Trace runtime paths
+The extraction rule is strict: domain code may depend on domain utilities, not app infrastructure.
 
-Trace the main entrypoints:
+### 1.2 Create a Personal domain boundary
 
-- web client build/runtime
-- React Native iOS/Android runtime
-- `lambda/index.ts`
-- `lambda/mcp/*`
-- `devserver.ts`
-- OAuth/token issuance
-- API-key authentication
-- sync/persistence
-- export/import
+Create a folder such as:
 
-Document which DI services each path actually requires.
+```text
+src/personal/core/
+  program/
+  workout/
+  progression/
+  exercises/
+  history/
+  units/
+  import/
+```
 
-### 1.3 Define first self-host target
+Where practical, re-export existing pure Liftosaur modules instead of copying them. If an upstream module is nearly pure but imports infrastructure, split the pure part from the integration part.
 
-Choose the minimum viable local replacements. Initial preferred topology:
+### 1.3 Define the Personal storage contract
 
-- Node API process using the existing handler via an HTTP adapter
-- DynamoDB Local for first-pass persistence compatibility
-- MinIO or S3-compatible object storage only if the required code paths need S3
-- Mailpit/local SMTP adapter for email in development
-- environment/file-backed secret provider
-- stdout/no-op replacements for CloudWatch/Lambda-only helpers where safe
-- static web bundle served separately or by a lightweight web server
+Add a versioned local model independent of Liftosaur account/sync structures:
 
-This intentionally avoids a Postgres rewrite in the first self-host milestone.
+```ts
+interface PersonalStore {
+  schemaVersion: number;
+  profile: PersonalProfile;
+  programs: PersonalProgram[];
+  activeProgramId?: string;
+  customExercises: PersonalExercise[];
+  history: PersonalWorkoutRecord[];
+  measurements: PersonalMeasurement[];
+  settings: PersonalSettings;
+}
+```
 
-### 1.4 Add an audit script
+Use stable local IDs only. Do not require server IDs or account IDs.
 
-Add `scripts/audit-upstream-dependencies.*` that scans for known upstream production identifiers and prints categorized findings.
+### 1.4 Define adapters instead of hard dependencies
 
-Initially it should report rather than fail CI. Phase 4 will convert approved rules into enforcement.
+Create small interfaces for capabilities that the UI needs:
 
-## Tests / validation
+```ts
+interface PersonalRepository {
+  load(): Promise<PersonalStore>;
+  save(store: PersonalStore): Promise<void>;
+}
 
-- Run the scanner in CI.
-- Verify all discovered hostnames/product IDs are represented in the audit document.
-- Manually compare the audit against `package.json`, `webpack*.config.js`, mobile project settings, and `lambda/utils/di.ts`.
+interface TechniqueLinkProvider {
+  getLinks(exerciseId: string): TechniqueLink[];
+}
+```
+
+The core must not know whether data lives in IndexedDB, memory, a JSON file, or a future sync bridge.
+
+### 1.5 Build deterministic tests
+
+Add fixtures for:
+
+- parsing a simple four-day program
+- custom exercise resolution
+- progression decisions
+- workout completion
+- history serialization
+- migration of schemaVersion 1 -> future versions
+
+Avoid real personal data in committed fixtures.
 
 ## Deliverables
 
-- `docs/architecture/dependency-audit.md`
-- machine-readable matrix such as `docs/architecture/dependencies.yml`
-- audit script
-- target topology decision for Phase 2
+- `src/personal/core/*`
+- pure domain tests
+- architecture note documenting retained Liftosaur modules and excluded infrastructure
+- dependency graph or import-check script preventing server/native-only imports into `src/personal/core`
 
 ## Acceptance criteria
 
-- Every known outbound production dependency has a purpose and planned disposition.
-- Every AWS dependency required by the account/API/MCP path has a replacement strategy.
-- We can describe the exact services required for a fresh self-hosted install.
-- No unresolved upstream dependency blocks Phase 2 design.
+- Personal core tests run in Node without React Native or AWS initialization.
+- No network access is needed to parse a program, start a workout, complete sets, progress loads, or serialize history.
+- The canonical four-day program can be represented without unknown exercises.
+- Core imports do not pull account, subscription, telemetry, or server modules.
 
 ## Suggested branch
 
-`fork/dependency-audit`
+`rewrite/personal-core`
 
 ---
 
-# Phase 2 — Self-host MVP
+# Phase 2 — Build the Sabertooth Personal PWA shell
 
 ## Goal
 
-Run the web app, authenticated API, persistent storage, and MCP-capable backend on infrastructure controlled by the Sabertooth operator, without requiring Liftosaur production services.
+Create a lightweight installable web app specifically for iPhone use, using the Personal core from Phase 1.
 
-## Architecture approach
+## Product scope
 
-Use compatibility-first adapters before redesigning persistence. The existing backend is built around AWS-shaped interfaces; replacing those interfaces is lower risk than rewriting the domain/API layer.
+Primary navigation:
 
-Recommended first topology:
+- Today
+- Program
+- History
+- Progress
+- Exercises
+- Settings
 
-```text
-Browser / Mobile
-      |
-      v
-Reverse proxy (HTTPS)
-  |            |
-  |            +---- static web app
-  |
-  +---------------- Node Sabertooth API/MCP
-                         |
-                         +---- DynamoDB Local
-                         +---- S3-compatible store if required
-                         +---- local/env secrets
-                         +---- SMTP/Mailpit in development
-                         +---- stdout logs
-```
+No login screen, account screen, subscription screen, social/community features, admin tooling, or cloud-sync UI.
 
 ## Implementation tasks
 
-### 2.1 Extract a production-safe Node HTTP adapter
+### 2.1 Create an isolated Personal entrypoint
 
-`devserver.ts` already turns Node HTTP requests into API Gateway-shaped events. Extract that logic into reusable modules, for example:
-
-- `server/httpAdapter.ts`
-- `server/main.ts`
-
-Requirements:
-
-- plain HTTP internally; TLS terminated by reverse proxy
-- configurable bind address and port
-- correct headers/cookies/body handling
-- streaming behavior required by MCP
-- health endpoint (`/healthz`)
-- graceful shutdown
-- no development certificates or `.liftosaur.com` assumptions
-
-### 2.2 Add self-host DI providers
-
-Implement providers matching the existing interfaces:
-
-- `IDynamoUtil`: initially configure AWS SDK against DynamoDB Local
-- `IS3Util`: configure against MinIO/S3-compatible endpoint or provide a local implementation for required paths
-- `ISecretsUtil`: environment/file-backed implementation
-- `ISesUtil`: SMTP/no-op provider depending environment
-- `ILambdaUtil`: explicit local implementation; either direct function dispatch for required internal calls or fail-fast for unsupported admin-only paths
-- `ICloudwatchUtil`: stdout/no-op implementation
-
-Select provider set with an environment variable such as:
-
-`SABERTOOTH_RUNTIME=selfhost`
-
-Do not overload subscription flags for infrastructure mode.
-
-### 2.3 Docker images
-
-Add:
-
-- `Dockerfile.web`
-- `Dockerfile.server`
-- `docker-compose.yml`
-- `.env.example`
-
-Compose services should include only what the MVP requires after Phase 1 confirms dependencies.
-
-### 2.4 Bootstrap storage
-
-Create an idempotent bootstrap command for tables/buckets/indexes.
+Prefer a separate entrypoint/build target instead of trying to make the full Liftosaur app conditionally hide features.
 
 Example:
 
-`npm run selfhost:init`
-
-It must be safe to rerun and must not destroy existing data.
-
-### 2.5 Configuration model
-
-Document and validate:
-
-- `SABERTOOTH_PUBLIC_URL`
-- API/public ports
-- storage endpoint/credentials
-- signing/JWT secrets
-- email configuration
-- MCP server name
-- CORS/cookie settings
-- optional telemetry toggles
-
-Add startup validation so missing required production settings fail with a clear error.
-
-### 2.6 Local developer command
-
-Target one command from a clean checkout:
-
-```bash
-cp .env.example .env
-docker compose up --build
+```text
+src/personal/
+  app.tsx
+  routes/
+  screens/
+  components/
+  core/
+  storage/
+  pwa/
 ```
 
-Document first-run account creation and data persistence volumes.
+Add a build command such as:
 
-## Tests / validation
+```bash
+npm run personal:build
+npm run personal:start
+```
 
-- server unit tests for request/event translation
-- integration test against DynamoDB Local
-- account registration/login test
-- API-key creation/authentication test
-- program create/read/update test
-- container restart persistence test
-- health endpoint test
+### 2.2 Set a dependency budget
+
+The Personal app should reuse existing frontend dependencies only when they materially reduce implementation risk.
+
+Do not add runtime service SDKs.
+
+Prefer:
+
+- React/ReactDOM already present in the repository
+- TypeScript
+- browser APIs
+- existing small UI primitives where they are web-safe
+
+Avoid adding:
+
+- Firebase/Supabase SDKs
+- analytics SDKs
+- auth SDKs
+- cloud storage SDKs
+- payment SDKs
+- state-management frameworks unless existing code makes them unavoidable
+
+### 2.3 Implement mobile-first layout
+
+Design for one-handed gym use:
+
+- large touch targets
+- high-contrast set controls
+- fixed bottom navigation
+- readable in portrait orientation
+- no hover-only interactions
+- minimal typing during a workout
+- weight/reps controls usable with sweaty hands
+
+### 2.4 Add PWA metadata
+
+Create a Sabertooth Personal manifest with:
+
+- standalone display mode
+- portrait orientation preference
+- Sabertooth name/short name
+- theme/background colors
+- icons owned by the fork
+- appropriate start URL
+
+### 2.5 Add an app-shell service worker
+
+Cache only what the base app needs offline:
+
+- generated JS/CSS
+- manifest/icons
+- local static exercise metadata/assets
+
+Use explicit cache versioning and upgrade behavior.
+
+Do not cache third-party video pages.
 
 ## Deliverables
 
-- Node self-host server entrypoint
-- self-host DI provider set
-- Docker Compose stack
-- bootstrap script
-- `.env.example`
-- `docs/self-hosting.md`
+- installable Personal web app
+- mobile navigation shell
+- PWA manifest/icons
+- service worker
+- offline app-shell test
 
 ## Acceptance criteria
 
-A fresh machine can clone the repo, configure `.env`, run Docker Compose, create/sign into an account, create a program, restart the stack, and see the same data afterward. No Liftosaur subscription or Liftosaur backend is involved.
+- App opens at a dedicated Personal route/build.
+- No login or backend is required.
+- Browser devtools can switch offline after first load and the app shell still opens.
+- The Personal bundle contains no AWS, billing, account, or analytics runtime initialization.
 
 ## Suggested branch
 
-`fork/self-host-foundation`
+`rewrite/personal-pwa-shell`
 
 ---
 
-# Phase 3 — MCP + OAuth end-to-end
+# Phase 3 — Workout execution + canonical four-day program
 
 ## Goal
 
-Make a self-hosted Sabertooth instance usable by an MCP client for authenticated workout/account operations.
+Make the PWA useful for actual training before adding broader features.
 
-## Implementation tasks
+The first release should be optimized around the existing four-day Monday/Tuesday/Thursday/Saturday program rather than recreating every generic Liftosaur feature.
 
-### 3.1 API-key path first
+## Canonical program to preload
 
-Before OAuth, prove the simplest authenticated MCP path:
+### Day 1 — Lower A
 
-- create API key in Sabertooth
-- call MCP endpoint with bearer/API-key authentication
-- verify public reference tools without auth
-- verify private program/history/custom-exercise tools with auth
+- 2 min incline walk/bike
+- Knee-to-Wall Ankle Rock — 8/side
+- 90/90 Hip Switch — 6/side
+- KB Prying Goblet Squat — 2x5
+- Broad Jump / low box jump — 3x3
+- Back Squat — 3x5
+- KB Single-Leg RDL — 3x8/side
+- KB Reverse Lunge — 2x8/side
+- KB Suitcase Carry — 2x20–30m/side
+- 90/90 + ankle cooldown
 
-This isolates MCP correctness from OAuth complexity.
+### Day 2 — Upper A
 
-### 3.2 OAuth metadata and endpoints
+- 2 min row
+- Open Book — 6/side
+- Band Pull-Apart — 15
+- KB Halo — 5/direction
+- Scap Push-Up — 8
+- Bench Press — 3x5
+- Chest-Supported DB Row — 3x8
+- Half-Kneeling Single-Arm KB Press — 2x8/side
+- Lat Pulldown / Assisted Pull-Up — 2x8–10
+- Face Pull — 2x12–15
 
-Use the existing configurable public URL support for:
+### Day 3 — Lower B
 
-- `/.well-known/oauth-protected-resource`
-- `/.well-known/oauth-authorization-server`
-- authorization/login flow
-- token exchange
-- MCP `WWW-Authenticate` challenge
+- 2 min walk/bike
+- Glute Bridge — 10
+- Hip Hinge Drill — 8
+- Adductor Rock-Back — 6/side
+- Light KB Deadlift — 8
+- Lateral Shuffle / deceleration block
+- Conventional Deadlift — 3x4
+- KB Goblet Squat — 3x8
+- Two-Hand KB Swing — 3x10
+- Dead Bug — 2x6–8/side
+- 90/90 + ankle cooldown
 
-Verify all generated URLs use `SABERTOOTH_PUBLIC_URL` rather than Liftosaur hosts.
+### Day 4 — Upper B
 
-### 3.3 Reverse-proxy compatibility
+- 2 min row
+- Wall Slide — 8
+- KB Halo — 5/direction
+- Band Pull-Apart — 15
+- unloaded/extremely light Turkish Get-Up — 1/side
+- Single-Arm KB OHP — 3x6–8/side
+- Assisted Pull-Up / Lat Pulldown — 3x6–8
+- Paused Bench Press — 2x6–8
+- Single-Arm KB Row — 2x10/side
+- Bottoms-Up KB Carry — 2x15–20m/side
 
-Support forwarded headers safely:
+### 3.1 Create all required exercise definitions
 
-- `X-Forwarded-Proto`
-- `X-Forwarded-Host`
-- trusted proxy configuration
+Do not substitute movements merely because upstream does not contain them.
 
-Do not derive security-sensitive origins from arbitrary untrusted headers when `SABERTOOTH_PUBLIC_URL` is configured.
+Add Personal custom exercise definitions where needed, including:
 
-### 3.4 MCP integration tests
+- Broad Jump
+- Knee-to-Wall Ankle Rock
+- 90/90 Hip Switch
+- KB Prying Goblet Squat if distinct behavior is useful
+- Open Book Thoracic Rotation
+- Band Pull-Apart
+- KB Halo
+- Scap Push-Up
+- Hip Hinge Drill
+- Adductor Rock-Back
+- Lateral Shuffle
+- Dead Bug
+- Wall Slide
+- KB Suitcase Carry
+- Bottoms-Up KB Carry
 
-Automate JSON-RPC tests for:
+### 3.2 Implement the Today screen
 
-- initialize
-- tools/list
-- public reference tool
-- unauthenticated private tool -> auth challenge
-- authenticated `list_programs`
-- `get_program`
-- `run_playground`
-- `create_custom_exercise`
-- `update_program`
-- history/stat query
+Today should show:
 
-Use isolated test users and verify cross-user access is denied.
+- current scheduled workout
+- estimated duration
+- warm-up section
+- work-set section
+- cooldown
+- `Start Workout`
 
-### 3.5 Client connection guide
+Allow manual choice of another day in case the schedule changes.
 
-Create `docs/mcp.md` documenting:
+### 3.3 Implement workout mode
 
-- MCP URL
-- API-key method
-- OAuth method
-- example client configuration
-- troubleshooting auth redirects
-- how to revoke credentials
+For each exercise show only the information needed now:
+
+- exercise name
+- short cue
+- sets/reps/duration/distance
+- working weight where applicable
+- RPE entry for tracked work sets
+- previous-session result
+- technique link button
+- set complete button
+- rest timer
+
+### 3.4 Handle unilateral and non-rep exercises correctly
+
+Support set schemas for:
+
+- reps
+- reps per side
+- timed intervals
+- distance carries
+- simple completion-only mobility drills
+
+Do not force carries or mobility into fake rep counts merely to match old Liftosaur schemas.
+
+### 3.5 Implement progression
+
+Encode the program's progression rules:
+
+- barbell compounds: progress when all reps are clean and final set is approximately RPE 8 or easier
+- squat/deadlift default increment: +5 lb
+- bench: +2.5 lb total when available; otherwise repeat/build before +5 lb
+- KB double progression for ranges such as 6–8 or 8–10
+- missed prescribed reps twice: reduce load approximately 7.5–10%
+- deload weeks can be represented as program metadata instead of hidden automatic behavior
+
+Allow all recommendations to be overridden manually.
+
+### 3.6 Add technique links
+
+Technique links are online enhancements only.
+
+Store links in local static metadata and display them only when network is available. Workout execution must remain fully functional without them.
 
 ## Tests / validation
 
-- full MCP test suite against a running self-host stack
-- token expiry/revocation
-- invalid token
-- cross-user access isolation
-- restart resilience for OAuth/API-key records
+- all four workouts can be started/completed offline
+- unilateral sets persist side-specific completion where relevant
+- timers continue sensibly across screen changes
+- a completed workout creates one history record
+- progression suggestion uses the correct prior-session data
+- no duplicate workout is created on accidental reload/reopen
 
 ## Acceptance criteria
 
-An external MCP client can discover the Sabertooth server, authenticate, read a user's program, validate Liftoscript, update that program, and read workout history without any paid subscription or Liftosaur-hosted API.
+A real gym session can be completed entirely from the PWA without opening Liftosaur, editing Liftoscript manually, or using an internet connection.
 
 ## Suggested branch
 
-`fork/self-host-mcp-oauth`
+`rewrite/personal-workout-mvp`
 
 ---
 
-# Phase 4 — Eliminate unintended Liftosaur network dependencies
+# Phase 4 — Local persistence, backup, restore, and Liftosaur migration
 
 ## Goal
 
-Ensure a normal Sabertooth session does not contact Liftosaur production infrastructure unless the operator explicitly configures an upstream integration.
+Make local data durable and portable so the app can be trusted without cloud infrastructure.
 
 ## Implementation tasks
 
-### 4.1 Centralize service configuration
+### 4.1 Implement IndexedDB repository
 
-Create a typed configuration module for all external service origins/IDs.
-
-Replace hard-coded production host selection in:
-
-- webpack configuration
-- native global constants
-- universal-link handling
-- API/service clients
-- update mechanisms
-- image/static URLs
-- OAuth links
-
-### 4.2 Telemetry policy
-
-Make telemetry explicitly opt-in for self-host deployments.
-
-For each telemetry/analytics provider:
-
-- disabled by default
-- configurable endpoint/key
-- no upstream Liftosaur credential embedded in a Sabertooth build
-- no account/workout data sent without explicit configuration
-
-### 4.3 Universal links and deep links
-
-Accept Sabertooth host/scheme. If backward-compatible Liftosaur import links are useful, treat them only as input parsing, not as a reason to contact upstream services.
-
-### 4.4 CI enforcement
-
-Upgrade the Phase 1 scanner to fail on unauthorized production references.
-
-Maintain an allowlist for:
-
-- upstream attribution/license links
-- documentation explaining Liftosaur migration
-- compatibility test fixtures
-
-Do not allow runtime code to silently add new upstream production dependencies.
-
-### 4.5 Network test
-
-Run an integration/e2e session behind a recording proxy and assert normal flows contact only configured Sabertooth/self-host services and intentionally retained third parties.
-
-## Acceptance criteria
-
-- Normal web/API/MCP use makes no request to Liftosaur production systems.
-- Build artifacts contain no upstream production API credentials.
-- CI prevents accidental reintroduction of runtime Liftosaur hosts.
-
-## Suggested branch
-
-`fork/remove-upstream-runtime-deps`
-
----
-
-# Phase 5 — Rebrand Sabertooth
-
-## Goal
-
-Make the fork operationally and visually distinct while retaining required upstream license/attribution.
-
-## Implementation tasks
-
-### 5.1 Product metadata
-
-Change:
-
-- package name/description where appropriate
-- HTML titles/meta
-- PWA manifest name/short name
-- MCP server display identity
-- support/contact references owned by the fork
-
-### 5.2 Web UI strings
-
-Replace user-facing Liftosaur branding with Sabertooth.
-
-Do not blindly replace historical references in:
-
-- license text
-- migration documentation
-- changelog attribution
-- upstream source acknowledgements
-
-### 5.3 Native identifiers
-
-Define new identifiers, e.g.:
-
-- iOS bundle ID
-- watch app IDs
-- Android application ID
-- URL/deep-link scheme
-- associated domains / asset links
-
-Update project files, manifests, Gradle/Xcode settings, and link handling together.
-
-### 5.4 Icons/assets
-
-Create Sabertooth-specific app icons, splash assets, favicon/PWA icons, and store artwork. Verify all required platform dimensions.
-
-### 5.5 Attribution
-
-Add a visible `About / Open Source` section stating that Sabertooth is a fork of Liftosaur and linking to source/license as required by AGPL and good attribution practice.
-
-## Tests / validation
-
-- grep/scan for user-facing Liftosaur strings
-- PWA install test
-- Android link/deep-link test
-- iOS link/deep-link test
-- app can coexist with official Liftosaur due to different bundle/application IDs
-
-## Acceptance criteria
-
-A user sees Sabertooth branding throughout the app; operating-system identifiers do not collide with Liftosaur; license/upstream notices remain intact.
-
-## Suggested branch
-
-`fork/rebrand-sabertooth`
-
----
-
-# Phase 6 — Remove commerce/subscription code
-
-## Goal
-
-Delete unused payment/subscription infrastructure rather than carrying permanently disabled code.
-
-## Preconditions
-
-- self-host stack works
-- client/API/MCP full access is stable
-- no requirement to maintain a subscription-gated Sabertooth distribution
-
-## Implementation tasks
-
-### 6.1 Build an inventory
-
-Use compiler/`knip` plus repository search to identify:
-
-- subscription screens
-- IAP adapters
-- StoreKit config
-- Play Billing code
-- purchase thunks
-- receipt cleanup/verification
-- server payment handlers
-- subscription tables/indexes
-- affiliate/payment reporting tied only to paid access
-
-### 6.2 Remove UI/payment flows
-
-Remove subscription purchase/management routes and buttons. Replace any remaining plan display with a simple Sabertooth account status only if needed.
-
-### 6.3 Remove native billing dependencies
-
-Remove `react-native-iap` and platform billing setup when no other code needs it.
-
-### 6.4 Remove server commerce infrastructure
-
-Delete payment verification/webhook/storage paths and deployment resources that are not needed for account access.
-
-Be careful not to delete generic secure-token utilities merely because subscription keys used them historically.
-
-### 6.5 Simplify types/storage
-
-Decide whether old imported storage containing subscription fields remains tolerated for compatibility. Preferred approach:
-
-- importer accepts/ignores legacy fields
-- new Sabertooth storage no longer writes them
-
-## Tests / validation
-
-- TypeScript compile
-- full unit suite
-- clean install without IAP native dependency
-- import legacy Liftosaur JSON containing subscription metadata
-- account/API/MCP behavior unchanged
-
-## Acceptance criteria
-
-No payment SDK, purchase UI, store receipt verification, or paid entitlement storage is required by a standard Sabertooth build/runtime.
-
-## Suggested branch
-
-`fork/remove-commerce`
-
----
-
-# Phase 7 — Liftosaur data migration compatibility
-
-## Goal
-
-Allow users to migrate legitimate exported data from Liftosaur into Sabertooth without losing programs/history/custom exercises/settings.
-
-## Current starting point
-
-The client already has JSON import UI using `ImporterStorage` and `Thunk_importStorage`. This phase turns that generic path into a tested migration contract.
-
-## Implementation tasks
-
-### 7.1 Define migration contract
-
-Document supported imported data:
-
-- programs/Liftoscript
-- workout history
-- custom exercises
-- exercise notes/config
-- gyms/equipment/settings
-- measurements
-- timers/preferences where portable
-
-Explicitly ignore/remove:
-
-- subscription/payment entitlement
-- upstream auth tokens
-- upstream-only telemetry identifiers
-- device-specific secrets
-
-### 7.2 Versioned fixtures
-
-Add sanitized fixtures from representative Liftosaur exports across relevant schema versions.
-
-Never commit real personal workout/account data.
-
-### 7.3 Preflight validator
-
-Before destructive import:
-
-- parse JSON
-- identify schema/version
-- report counts: programs/history/custom exercises/etc.
-- report unsupported fields
-- reject malformed data before touching current storage
-
-### 7.4 Automatic backup
-
-Before import, automatically produce or prompt for a Sabertooth export backup.
-
-### 7.5 Migration transforms
-
-Add explicit migrations for schema differences introduced by rebranding/commerce removal/self-hosting.
-
-Keep migrations pure and unit-testable.
-
-### 7.6 Post-import verification
-
-After import validate:
-
-- program references resolve
-- custom exercise IDs resolve
-- history references valid exercises
-- current program exists
-- settings defaults filled
-
-## Tests / validation
-
-- fixture imports
-- round-trip Sabertooth export/import
-- corrupted file leaves existing data untouched
-- legacy subscription metadata does not grant/deny anything
-- large-history import performance
-
-## Acceptance criteria
-
-A Liftosaur export can be imported into Sabertooth and the user sees the same core programs, custom exercises, workout history, settings, and measurements after restart/sync.
-
-## Suggested branch
-
-`fork/data-migration`
-
----
-
-# Phase 8 — Mobile build and release pipeline
-
-## Goal
-
-Produce reproducible installable Android/iOS builds under Sabertooth identifiers.
-
-## Implementation tasks
-
-### 8.1 Local release builds
-
-Get clean local builds working for:
-
-- Android APK/AAB
-- iOS simulator release
-- iOS archive/device release
-- watchOS only after main iOS app is stable
-
-Remove developer-specific device IDs/names from general release scripts.
-
-### 8.2 Signing configuration
-
-Externalize signing details. Do not commit certificates/private keys.
-
-Document required secrets for:
-
-- Android keystore
-- Apple signing/profile/team
-- optional store upload credentials
-
-### 8.3 GitHub Actions
-
-Add workflows for:
-
-- typecheck/tests
-- web build
-- Android unsigned/debug artifact on PR or tag
-- signed releases only when repository secrets are configured
-- iOS build where runner/signing constraints allow
-
-### 8.4 Versioning
-
-Define one source of truth for:
-
-- semantic app version
-- Android versionCode
-- iOS build number
-- MCP/server version
-
-### 8.5 Release process
-
-Create `docs/releasing.md` with:
-
-- tag naming
-- changelog expectations
-- build artifact locations
-- upgrade notes
-- rollback procedure
-
-## Tests / validation
-
-- install Android artifact on a clean device/emulator
-- install iOS build on simulator/device
-- verify self-host base URL configuration
-- deep links
-- login/sync
-- offline workout behavior
-- update compatibility
-
-## Acceptance criteria
-
-A tagged commit can produce repeatable Sabertooth artifacts without Liftosaur signing credentials or bundle identifiers.
-
-## Suggested branch
-
-`fork/release-pipeline`
-
----
-
-# Phase 9 — Personal fitness workflow and MCP-managed program
-
-## Goal
-
-Use Sabertooth for the original practical objective: manage the user's actual 4-day training program cleanly from ChatGPT/MCP.
-
-## Implementation tasks
-
-### 9.1 Canonical program source
-
-Add a version-controlled program definition under a Sabertooth-owned path, for example:
-
-`programs/personal/ishank-4-day.lft`
-
-Keep the canonical workout content aligned with the fitness project:
-
-- Day 1 Lower A
-- Day 2 Upper A
-- Day 3 Lower B
-- Day 4 Upper B
-- warm-up guidance
-- progression/deload behavior
-
-### 9.2 Exercise compatibility audit
-
-Use Sabertooth's built-in exercise definitions and MCP `list_exercises` to decide which movements are built-in versus custom.
-
-Create only the custom exercises needed for tracked work. Keep low-value mobility/warm-up drills as concise workout notes where appropriate.
-
-### 9.3 Liftoscript validation
-
-For every day:
-
-- parse with current Liftoscript grammar
-- run MCP playground simulation
-- verify equipment names
-- verify unilateral semantics
-- verify timers/rest
-- verify starting weights/progression
-- ensure no giant visible comment blocks
-
-### 9.4 Idempotent installer/updater
-
-Build a script or MCP workflow that can:
-
-- locate the canonical program
-- create required custom exercises if missing
-- create/update the program
-- avoid duplicate exercises/programs
-- report the resulting program ID/version
-
-### 9.5 ChatGPT workflow test
-
-Test realistic commands:
-
-- "Show me Day 2"
-- "Change my bench starting weight"
-- "Add a set to Thursday's pulldown"
-- "Analyze my last four squat workouts"
-- "Create the missing custom exercise and validate the program"
-
-Every write action should clearly identify what changed.
-
-## Tests / validation
-
-- playground validation for all four days
-- program update preserves workout history mapping
-- custom-exercise creation is idempotent
-- manual workout completion on mobile syncs and appears through MCP
-
-## Acceptance criteria
-
-The user can manage the canonical 4-day program and inspect training history through Sabertooth MCP without manually editing/copying Liftoscript for routine changes.
-
-## Suggested branch
-
-`feature/ishank-program-mcp`
-
----
-
-# Phase 10 — Hardening, backup, security, and upstream maintenance
-
-## Goal
-
-Make Sabertooth safe to depend on for long-term workout history and account access.
-
-## Implementation tasks
-
-### 10.1 Threat model
-
-Document assets and trust boundaries:
-
-- password/session credentials
-- OAuth tokens/API keys
-- workout/history data
-- measurements
-- import files
-- server secrets
-
-Review:
-
-- authentication
-- authorization/user scoping
-- CSRF/session cookies
-- OAuth redirect validation
-- API-key storage/hash strategy
-- rate limiting
-- brute-force resistance
-
-### 10.2 Backup/restore
-
-Implement documented backup of all persistent stores.
+Create `IndexedDbPersonalRepository` behind the Phase 1 repository interface.
 
 Requirements:
 
-- automated scheduled backup option
-- encrypted off-host backup guidance
-- restore into a fresh instance
-- periodic restore test
+- atomic-enough writes for workout completion
+- schema version metadata
+- upgrade/migration functions
+- no destructive migration without explicit fallback handling
+- transaction boundaries around history/program updates
 
-### 10.3 Observability
+### 4.2 Add autosave during workouts
 
-Provide:
+Persist in-progress workout state after meaningful actions:
 
-- structured logs
-- request IDs
-- auth/security events without leaking credentials
-- health/readiness endpoints
-- optional metrics
+- set complete/uncomplete
+- reps/weight edits
+- exercise substitutions
+- RPE edits
+- notes
 
-No workout/account payloads should be dumped into logs by default.
+If Safari kills the PWA, reopening should offer to resume.
 
-### 10.4 Dependency/security checks
+### 4.3 Add manual JSON backup
 
-CI should run:
+Settings should provide:
 
-- TypeScript checks
-- tests
-- dependency vulnerability scan
-- secret scan
-- upstream-host audit
-- license/SBOM generation where practical
+- Export Backup
+- Restore Backup
 
-### 10.5 Upgrade strategy
+Backup should contain all durable Personal data and a format version.
 
-Document how to pull useful upstream Liftosaur changes without reintroducing:
+Suggested filename:
 
-- subscription gates
-- upstream hosts
-- payment code
-- official bundle IDs
+```text
+sabertooth-personal-YYYY-MM-DD.json
+```
 
-Maintain a `docs/upstream-sync.md` checklist and regression tests around Sabertooth-specific invariants.
+### 4.4 Add backup validation
 
-### 10.6 Disaster recovery
+Before restore:
 
-Run a tabletop/automated scenario:
+- parse JSON
+- validate schema/version
+- display summary counts
+- reject malformed data
+- warn that restore replaces/merges data depending chosen mode
 
-1. destroy local containers/runtime
-2. retain only source, config secrets, and backup
-3. deploy clean instance
-4. restore data
-5. sign in
-6. read/update program through MCP
+Create a safety backup of current state before destructive replacement where browser capabilities permit.
+
+### 4.5 Add Liftosaur JSON migration
+
+Reuse/port upstream import logic only as needed.
+
+Migration should attempt to preserve:
+
+- programs
+- history
+- custom exercises
+- measurements
+- settings that map cleanly
+
+Explicitly ignore:
+
+- subscription/payment state
+- account/auth tokens
+- upstream sync identifiers
+- analytics identifiers
+- server-only metadata
+
+### 4.6 Add migration fixtures
+
+Commit sanitized fixtures representing supported export structures. Never commit the user's actual production backup.
 
 ## Acceptance criteria
 
-- backup restore is proven
-- auth isolation tests pass
-- no high-severity known vulnerability is knowingly shipped without documented mitigation
-- a clean redeploy can restore user data and MCP access
-- upstream merge procedure protects Sabertooth's free/self-hosted invariants
+- Data survives browser restarts and PWA relaunches.
+- An interrupted workout can be resumed.
+- Backup -> clear local data -> restore reconstructs equivalent programs/history/settings.
+- A supported Liftosaur export can be migrated without importing subscription or account credentials.
 
 ## Suggested branch
 
-`fork/hardening`
+`rewrite/personal-local-data`
 
 ---
 
-# Milestones
+# Phase 5 — iPhone installation and offline validation
 
-## Milestone A — Independently runnable
+## Goal
 
-Phases 1–2 complete.
+Validate the app as an actual iPhone product rather than assuming desktop-browser behavior translates correctly.
 
-Result: Sabertooth runs on self-hosted infrastructure with persistent accounts/programs.
+## Implementation tasks
 
-## Milestone B — AI-manageable
+### 5.1 Add explicit installation guidance
 
-Phase 3 complete.
+A small first-run screen should explain:
 
-Result: an MCP client can authenticate and manage programs/history.
+1. open in Safari
+2. Share
+3. Add to Home Screen
+4. launch from the new icon
 
-## Milestone C — Independent product
+Do not block browser use if the user chooses not to install.
 
-Phases 4–6 complete.
+### 5.2 Test iOS PWA lifecycle
 
-Result: no unintended Liftosaur production dependency, Sabertooth branding/identifiers, no commerce runtime/code.
+Validate:
 
-## Milestone D — Migratable and installable
+- first load
+- Add to Home Screen
+- cold launch
+- background/foreground
+- force-close and reopen
+- airplane mode
+- network loss mid-workout
+- iOS memory pressure/relaunch behavior
+- screen locking during rest timers
 
-Phases 7–8 complete.
+### 5.3 Make timers resilient
 
-Result: Liftosaur exports migrate cleanly and Sabertooth mobile builds are reproducible.
+Do not rely solely on an in-memory decrementing interval.
 
-## Milestone E — Daily-driver fitness system
+Persist absolute target timestamps so returning from background computes remaining time correctly.
 
-Phase 9 complete.
+Use vibration/audio only if reliable and user-initiated under iOS browser policies.
 
-Result: the canonical 4-day program is installed, validated, and manageable through MCP.
+### 5.4 Safe-area and keyboard polish
 
-## Milestone F — Durable
+Handle:
 
-Phase 10 complete.
+- notch/Dynamic Island safe areas
+- bottom home indicator
+- virtual keyboard obscuring weight/reps inputs
+- landscape fallback even if portrait is preferred
 
-Result: backup/restore, security, observability, and upstream maintenance processes are in place.
+### 5.5 Offline cache upgrades
 
-# Immediate next PR
+Implement predictable update flow:
 
-Start Phase 1 on `fork/dependency-audit` and use its findings to finalize the exact Docker Compose services for Phase 2. The first implementation PR should not attempt a database rewrite; it should establish the dependency matrix, audit tooling, and self-host architecture decision.
+- old cached app continues working until new assets are ready
+- new service worker activates cleanly
+- local data is never cleared by an app-shell upgrade
+- Settings exposes app version/build hash
+
+### 5.6 Device acceptance session
+
+Run at least one full Day 1–4 cycle from an installed iPhone PWA before calling MVP complete.
+
+Log friction points such as excessive taps, input focus problems, timer issues, and unreadable layouts.
+
+## Acceptance criteria
+
+The installed app can run a full workout in airplane mode, survive backgrounding/reopening, preserve progress, and remain comfortable to operate with one hand.
+
+## Suggested branch
+
+`rewrite/personal-ios-pwa`
+
+---
+
+# Phase 6 — Enforce minimal external dependency behavior
+
+## Goal
+
+Prove that the Personal build does not accidentally inherit Liftosaur's SaaS/network behavior.
+
+## Implementation tasks
+
+### 6.1 Build-time dependency guard
+
+Add a script that inspects the Personal import graph or compiled bundle for forbidden infrastructure modules/patterns such as:
+
+- AWS SDK packages
+- account/auth modules
+- subscription/IAP modules
+- Rollbar/analytics/attribution modules
+- Liftosaur production API hosts
+- MCP/OAuth server modules
+
+Allow upstream attribution URLs in documentation/about text.
+
+### 6.2 Runtime network test
+
+With technique videos disabled/not clicked, run the main flows and assert zero unexpected network calls after the app shell is installed:
+
+- open Today
+- start workout
+- complete workout
+- view History
+- edit Program
+- export backup
+
+### 6.3 Remove unused Personal-facing SaaS UI
+
+Ensure the Personal entrypoint exposes none of the following:
+
+- account creation/login
+- subscription state
+- payment screens
+- sync errors
+- API keys
+- cloud backup
+- community/social features
+
+This does not require deleting all legacy upstream code from the repository yet; it requires keeping it out of the Personal build.
+
+### 6.4 Bundle-size review
+
+Measure JS/CSS payload and identify unnecessary inherited libraries. Remove or split large dependencies that offer little value for the Personal app.
+
+## Acceptance criteria
+
+- Personal bundle contains no AWS/payment/analytics runtime.
+- Normal installed-PWA workout use generates no Liftosaur or Sabertooth backend request.
+- CI fails if forbidden infrastructure is newly imported into the Personal entrypoint.
+
+## Suggested branch
+
+`rewrite/personal-dependency-guard`
+
+---
+
+# Phase 7 — Optional MCP bridge
+
+## Goal
+
+Enable ChatGPT-assisted program/history workflows without making the workout app depend on a server.
+
+This phase is optional and starts only after the local PWA is stable.
+
+## Design constraint
+
+Browser IndexedDB on the iPhone is private local data. A remote MCP server cannot directly read it. We therefore need an explicit synchronization boundary.
+
+## Phase 7A — Manual bridge first
+
+Start with the smallest integration:
+
+1. PWA exports a Sabertooth JSON snapshot.
+2. User imports/uploads it to the bridge when AI assistance is wanted.
+3. MCP tools operate on that snapshot.
+4. Bridge produces an updated program/data export.
+5. PWA imports the result after explicit user confirmation.
+
+This is intentionally not seamless, but it proves the workflow with almost no infrastructure.
+
+### MCP tool subset
+
+Start with:
+
+- list_programs
+- get_program
+- validate_program
+- update_program
+- list_exercises
+- create_custom_exercise
+- summarize_history
+
+Do not expose unrelated upstream admin/SaaS tools.
+
+## Phase 7B — Optional explicit sync
+
+Only if manual exchange becomes annoying, evaluate a tiny encrypted sync layer.
+
+Requirements:
+
+- opt-in
+- no analytics
+- no billing
+- minimal identity mechanism
+- encrypted transport
+- explicit device pairing
+- conflict handling
+- easy disable/delete
+
+Possible implementations should be compared by operational dependency count, not feature count.
+
+A one-user deployment may be simpler than a generic multi-tenant account system.
+
+## Acceptance criteria
+
+The base app continues to work if the MCP bridge is deleted or offline. AI integration never becomes a prerequisite for workouts or history access.
+
+## Suggested branches
+
+`optional/personal-mcp-manual`
+
+then, only if justified:
+
+`optional/personal-sync-bridge`
+
+---
+
+# Phase 8 — Hardening, release/update process, and native-app decision
+
+## Goal
+
+Make Sabertooth Personal dependable enough for long-term use and decide whether a native iOS wrapper/app is actually necessary.
+
+## Implementation tasks
+
+### 8.1 Backup discipline
+
+Add:
+
+- last-backup date in Settings
+- non-blocking reminder when backups are stale
+- backup format migration tests
+- restore tests against older supported versions
+
+Do not upload backups automatically without an explicit future sync feature.
+
+### 8.2 Data integrity
+
+Add checks for:
+
+- duplicate workout completion
+- orphan custom exercise references
+- invalid active program ID
+- impossible numeric values
+- corrupted in-progress workout state
+
+On corruption, preserve original data for export/debug before attempting repair.
+
+### 8.3 Release strategy
+
+For early releases, publish static PWA builds with:
+
+- version number
+- git commit hash
+- release notes
+- rollback artifact
+
+Avoid requiring App Store distribution for the MVP.
+
+### 8.4 Upstream reuse strategy
+
+Document which Liftosaur components are vendored/reused and how upstream fixes will be selectively reviewed.
+
+Do not regularly merge the entire upstream application into the Personal app if that would reintroduce SaaS dependencies.
+
+### 8.5 Native iOS decision gate
+
+After several weeks of real PWA use, evaluate whether PWA limitations materially hurt the experience.
+
+Reasons that could justify a native app later:
+
+- unreliable background timers
+- desired Apple Health integration
+- Watch integration
+- local notifications not meeting needs
+- stronger file/backup integration
+
+If those are not meaningful problems, keep the PWA and avoid native build/signing complexity.
+
+## Acceptance criteria
+
+- Data has a tested backup/restore story.
+- PWA updates do not erase local workout data.
+- A bad release can be rolled back.
+- Native iOS work begins only because of demonstrated PWA limitations, not by default.
+
+## Suggested branch
+
+`rewrite/personal-hardening`
+
+---
+
+# MVP definition
+
+Sabertooth Personal v0.1 is complete when all of the following are true:
+
+1. It can be installed on the user's iPhone from Safari.
+2. It launches and works in airplane mode after installation.
+3. All four canonical workouts are preloaded.
+4. Every required exercise exists; there are no unknown-exercise errors.
+5. Warmups, work sets, carries, mobility drills, unilateral work, timers, RPE, and notes are representable without fake Liftoscript workarounds.
+6. Completed workouts appear in History.
+7. The next-session load suggestion is calculated locally.
+8. In-progress workouts survive app backgrounding/reopening.
+9. Data persists locally with no account or backend.
+10. Full backup and restore work through JSON files.
+11. A Liftosaur JSON export can be migrated through the supported importer.
+12. Normal use makes no request to Liftosaur production infrastructure.
+13. Normal use requires no AWS, cloud database, OAuth, analytics, payment service, or MCP server.
+
+# What is explicitly not required for v0.1
+
+- multi-user accounts
+- cloud sync
+- subscriptions/payments
+- App Store distribution
+- Apple Watch
+- Apple Health
+- social/community features
+- web dashboards for administrators
+- generic SaaS hosting
+- always-on MCP connectivity
+
+These can be considered later only when a concrete personal-use need justifies the additional dependency and maintenance cost.
