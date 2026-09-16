@@ -7,7 +7,7 @@ import { UidFactory_generateUid } from "./generator";
 import { CollectionUtils_removeBy } from "./collection";
 import { SubscriptionReceipts_cleanupApple } from "./subscriptionReceipts";
 import { Thunk_postevent } from "../ducks/thunks";
-import { AppAccessPolicy_hasFullAccess } from "./appAccessPolicy";
+import { AppAccessPolicy_hasFullAccess, AppAccessPolicy_shouldUseCommerce } from "./appAccessPolicy";
 
 export function Subscriptions_hasSubscription(subscription: ISubscription): boolean {
   if (AppAccessPolicy_hasFullAccess()) {
@@ -109,6 +109,9 @@ export function Subscriptions_cleanupOutdatedAppleReceipts(
   service: Service,
   subscription: ISubscription
 ): Promise<void> {
+  if (!AppAccessPolicy_shouldUseCommerce()) {
+    return Promise.resolve();
+  }
   return Promise.all(
     subscription.apple.map<Promise<[string, boolean]>>(async (value) => {
       return [value.value, await Subscriptions_verifyAppleReceipt(userId, service, value.value)];
@@ -135,6 +138,9 @@ export function Subscriptions_cleanupOutdatedGooglePurchaseTokens(
   service: Service,
   subscription: ISubscription
 ): Promise<void> {
+  if (!AppAccessPolicy_shouldUseCommerce()) {
+    return Promise.resolve();
+  }
   return Promise.all(
     subscription.google.map<Promise<[string, boolean]>>(async (token) => {
       return [token.id, await Subscriptions_verifyGooglePurchaseToken(service, userId, token.value)];
@@ -161,6 +167,9 @@ export function Subscriptions_cleanupOutdatedGooglePurchaseTokens(
 }
 
 export function Subscriptions_verifyAppleReceipt(userId: string, service: Service, receipt?: string): Promise<boolean> {
+  if (!AppAccessPolicy_shouldUseCommerce()) {
+    return Promise.resolve(false);
+  }
   if (receipt != null) {
     return service.verifyAppleReceipt(userId, receipt);
   } else {
@@ -173,6 +182,9 @@ export function Subscriptions_verifyGooglePurchaseToken(
   userId: string,
   purchaseToken?: string
 ): Promise<boolean> {
+  if (!AppAccessPolicy_shouldUseCommerce()) {
+    return Promise.resolve(false);
+  }
   if (purchaseToken != null) {
     return service.verifyGooglePurchaseToken(userId, purchaseToken);
   } else {
