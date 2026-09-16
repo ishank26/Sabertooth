@@ -7,8 +7,12 @@ import { UidFactory_generateUid } from "./generator";
 import { CollectionUtils_removeBy } from "./collection";
 import { SubscriptionReceipts_cleanupApple } from "./subscriptionReceipts";
 import { Thunk_postevent } from "../ducks/thunks";
+import { AppAccessPolicy_hasFullAccess } from "./appAccessPolicy";
 
 export function Subscriptions_hasSubscription(subscription: ISubscription): boolean {
+  if (AppAccessPolicy_hasFullAccess()) {
+    return true;
+  }
   if (subscription.key && subscription.key !== "unclaimed") {
     return true;
   }
