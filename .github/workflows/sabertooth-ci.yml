@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - "fork/**"
+      - "rewrite/**"
 
 jobs:
   test:
@@ -16,6 +17,19 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      - name: Check Personal PWA JavaScript syntax
+        run: |
+          node --check personal/app.js
+          node --check personal/program.js
+          node --check personal/storage.js
+          node --check personal/sw.js
+      - name: Check Personal PWA required assets
+        run: |
+          test -f personal/index.html
+          test -f personal/manifest.webmanifest
+          test -f personal/icon.svg
+          grep -q 'sabertooth-personal-backup' personal/storage.js
+          grep -q 'serviceWorker' personal/app.js
       - run: npm ci
       - name: Prepare generated sources
         run: |
