@@ -251,7 +251,6 @@ async function renderToday() {
         <h3>What’s included</h3>
         ${groupExercises(day).map((group) => `<p><strong>${group.section}</strong><br><span class="muted small">${group.exercises.map((exercise) => exercise.name).join(" · ")}</span></p>`).join("")}
       </section>`;
-    bindViewEvents();
     return;
   }
 
@@ -260,8 +259,8 @@ async function renderToday() {
     <section class="card hero-card">
       <div class="eyebrow">WORKOUT IN PROGRESS</div>
       <h2>${day.name}</h2>
-      <p class="muted">Started ${formatTime(activeSession.startedAt)} · ${stats.complete}/${stats.total} sets done</p>
-      <progress value="${stats.complete}" max="${stats.total}"></progress>
+      <p class="muted">Started ${formatTime(activeSession.startedAt)} · <span id="set-progress-text">${stats.complete}/${stats.total} sets done</span></p>
+      <progress id="set-progress" value="${stats.complete}" max="${stats.total}"></progress>
     </section>
     ${groupExercises(day).map((group) => `
       <div class="section-title"><strong>${group.section}</strong><span>${group.exercises.length} exercise${group.exercises.length > 1 ? "s" : ""}</span></div>
@@ -274,7 +273,6 @@ async function renderToday() {
         <button class="primary-button" type="button" data-action="finish-workout">Finish workout</button>
       </div>
     </section>`;
-  bindViewEvents();
   ensureTimerTicker();
 }
 
@@ -293,7 +291,6 @@ function renderProgram() {
         ${groupExercises(day).map((group) => `<p><strong>${group.section}</strong><br><span class="small muted">${group.exercises.map((exercise) => `${exercise.name} (${exercise.sets}×${exercise.target})`).join(" · ")}</span></p>`).join("")}
         <button class="secondary-button full-width" type="button" data-action="choose-day" data-day="${day.id}">Open in Today</button>
       </section>`).join("")}`;
-  bindViewEvents();
 }
 
 async function renderHistory() {
@@ -345,9 +342,9 @@ async function renderProgress() {
     </section>
     <div class="section-title"><strong>Best logged loads</strong><span>completed sets</span></div>
     <section class="card">
-      ${lifts.map(([name, id], index) => {
+      ${lifts.map(([name, id]) => {
         const best = bestWeightForExercise(sessions, id);
-        return `<div class="history-row" ${index ? "" : ""}><span>${name}</span><strong>${best === null ? "—" : `${best} lb`}</strong></div>`;
+        return `<div class="history-row"><span>${name}</span><strong>${best === null ? "—" : `${best} lb`}</strong></div>`;
       }).join("")}
     </section>
     <section class="card">
@@ -380,7 +377,6 @@ function renderSettings() {
       </div>
     </section>
     <section class="card"><h3>Install</h3><p class="small muted">On iPhone: Safari → Share → Add to Home Screen. The base workout app is designed to work offline after its first successful load.</p></section>`;
-  bindViewEvents();
 }
 
 async function render() {
@@ -415,23 +411,27 @@ async function handleAction(action, element) {
   }
 
   if (action === "toggle-set") {
+    if (!activeSession) return;
     const exerciseId = element.dataset.exercise;
     const setIndex = Number(element.dataset.set);
     const exercise = getProgramDay(activeSession.dayId).exercises.find((item) => item.id === exerciseId);
-    const set = activeSession.logs[exerciseId][setIndex];
+    const set = activeSession.logs[exerciseId]?.[setIndex];
+    if (!exercise || !set) return;
     set.done = !set.done;
     await persistActiveSession();
-    if (set.done && exercise?.restSec) startRestTimer(exercise.restSec);
+    if (set.done && exercise.restSec) startRestTimer(exercise.restSec);
     const card = document.querySelector(`#exercise-${exerciseId}`);
     if (card) card.outerHTML = exerciseCardMarkup(exercise, activeSession);
-    bindViewEvents();
     const stats = setCompletionStats(activeSession);
-    const progress = document.querySelector("progress");
+    const progress = document.querySelector("#set-progress");
+    const progressText = document.querySelector("#set-progress-text");
     if (progress) progress.value = stats.complete;
+    if (progressText) progressText.textContent = `${stats.complete}/${stats.total} sets done`;
     return;
   }
 
   if (action === "finish-workout") {
+    if (!activeSession) return;
     const stats = setCompletionStats(activeSession);
     const ok = await askConfirm("Finish workout?", `${stats.complete} of ${stats.total} sets are marked complete. Save this workout to history?`, "Finish");
     if (!ok) return;
@@ -495,45 +495,36 @@ async function handleAction(action, element) {
   }
 }
 
-function bindViewEvents() {
-  app.querySelectorAll("[data-action]").forEach((element) => {
-    element.addEventListener("click", () => handleAction(element.dataset.action, element));
-  });
-
-  app.querySelectorAll("input[data-field]").forEach((input) => {
-    input.addEventListener("change", async () => {
-      if (!activeSession) return;
-      const { exercise, set, field } = input.dataset;
-      activeSession.logs[exercise][Number(set)][field] = input.value === "" ? "" : Number(input.value);
-      await persistActiveSession();
-    });
-  });
-
-  const selector = app.querySelector("#day-selector");
-  if (selector) {
-    selector.addEventListener("change", async () => {
-      selectedDayId = selector.value;
-      await setSetting("selectedDayId", selectedDayId);
-      render();
-    });
+async function handleAppChange(target) {
+  if (target.matches("input[data-field]")) {
+    if (!activeSession) return;
+    const { exercise, set, field } = target.dataset;
+    const log = activeSession.logs[exercise]?.[Number(set)];
+    if (!log) return;
+    log[field] = target.value === "" ? "" : Number(target.value);
+    await persistActiveSession();
+    return;
   }
 
-  const backupInput = app.querySelector("#backup-file");
-  if (backupInput) {
-    backupInput.addEventListener("change", async () => {
-      const file = backupInput.files?.[0];
-      if (!file) return;
-      try {
-        const payload = JSON.parse(await file.text());
-        await importBackup(payload);
-        activeSession = await getSetting("activeSession");
-        selectedDayId = await getSetting("selectedDayId", getScheduledDay().id);
-        window.alert("Backup restored.");
-        render();
-      } catch (error) {
-        window.alert(error instanceof Error ? error.message : "Could not restore backup.");
-      }
-    });
+  if (target.id === "day-selector") {
+    selectedDayId = target.value;
+    await setSetting("selectedDayId", selectedDayId);
+    return render();
+  }
+
+  if (target.id === "backup-file") {
+    const file = target.files?.[0];
+    if (!file) return;
+    try {
+      const payload = JSON.parse(await file.text());
+      await importBackup(payload);
+      activeSession = await getSetting("activeSession");
+      selectedDayId = await getSetting("selectedDayId", getScheduledDay().id);
+      window.alert("Backup restored.");
+      return render();
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "Could not restore backup.");
+    }
   }
 }
 
@@ -545,6 +536,22 @@ async function init() {
     button.addEventListener("click", () => {
       currentView = button.dataset.view;
       render();
+    });
+  });
+
+  app.addEventListener("click", (event) => {
+    const actionElement = event.target.closest("[data-action]");
+    if (!actionElement || !app.contains(actionElement)) return;
+    handleAction(actionElement.dataset.action, actionElement).catch((error) => {
+      console.error(error);
+      window.alert("Sabertooth could not save that change. Please try again.");
+    });
+  });
+
+  app.addEventListener("change", (event) => {
+    handleAppChange(event.target).catch((error) => {
+      console.error(error);
+      window.alert("Sabertooth could not save that change. Please try again.");
     });
   });
 
