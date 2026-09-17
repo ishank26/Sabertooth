@@ -28,9 +28,21 @@ python3 -m http.server 8080 --directory personal
 
 Then open `http://localhost:8080` in a desktop browser. Service workers require HTTPS except on localhost.
 
+## GitHub Pages deployment
+
+`.github/workflows/personal-pages.yml` publishes only the contents of `personal/` after changes reach `master`. This is a deployment convenience, not a runtime dependency: the installed PWA remains a static app and workout data stays local.
+
+For the first deployment, configure the repository's Pages source to **GitHub Actions** if GitHub has not already done so. With the repository's standard Pages hostname, the expected URL is typically:
+
+```text
+https://ishank26.github.io/Sabertooth/
+```
+
+A custom domain can be added later without changing the app architecture.
+
 ## Install on iPhone
 
-1. Host the `personal/` directory over HTTPS.
+1. Host the `personal/` directory over HTTPS (the Pages workflow above is the default path).
 2. Open the URL in Safari on the iPhone.
 3. Tap **Share**.
 4. Choose **Add to Home Screen**.
