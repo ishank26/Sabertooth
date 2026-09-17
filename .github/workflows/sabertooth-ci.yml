@@ -19,9 +19,9 @@ jobs:
           cache: npm
       - name: Check Personal PWA JavaScript syntax
         run: |
-          node --check personal/app.js
-          node --check personal/program.js
-          node --check personal/storage.js
+          node --input-type=module --check < personal/app.js
+          node --input-type=module --check < personal/program.js
+          node --input-type=module --check < personal/storage.js
           node --check personal/sw.js
       - name: Check Personal PWA required assets
         run: |
