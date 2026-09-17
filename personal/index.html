@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0b0d10" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Sabertooth" />
+    <title>Sabertooth Personal</title>
+    <link rel="manifest" href="./manifest.webmanifest" />
+    <link rel="icon" href="./icon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="./icon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">SABERTOOTH PERSONAL</div>
+          <h1 id="screen-title">Today</h1>
+        </div>
+        <button id="install-help" class="icon-button" type="button" aria-label="Install help">＋</button>
+      </header>
+
+      <main id="app" class="main-content" aria-live="polite"></main>
+
+      <nav class="bottom-nav" aria-label="Primary navigation">
+        <button class="nav-item is-active" data-view="today" type="button"><span>●</span><small>Today</small></button>
+        <button class="nav-item" data-view="program" type="button"><span>▦</span><small>Program</small></button>
+        <button class="nav-item" data-view="history" type="button"><span>↺</span><small>History</small></button>
+        <button class="nav-item" data-view="progress" type="button"><span>↗</span><small>Progress</small></button>
+        <button class="nav-item" data-view="settings" type="button"><span>⚙</span><small>Settings</small></button>
+      </nav>
+    </div>
+
+    <dialog id="install-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2>Install on iPhone</h2>
+        <p>Open this page in Safari, tap <strong>Share</strong>, choose <strong>Add to Home Screen</strong>, then tap <strong>Add</strong>.</p>
+        <p>After the first load, your workout app and saved data work without a Liftosaur account or subscription.</p>
+        <button class="primary-button" value="close">Got it</button>
+      </form>
+    </dialog>
+
+    <dialog id="confirm-dialog">
+      <form method="dialog" class="dialog-card">
+        <h2 id="confirm-title">Confirm</h2>
+        <p id="confirm-message"></p>
+        <div class="button-row">
+          <button class="secondary-button" value="cancel">Cancel</button>
+          <button id="confirm-action" class="danger-button" value="confirm">Confirm</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
